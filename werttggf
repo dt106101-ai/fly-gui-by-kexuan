@@ -1,0 +1,204 @@
+-- [[ 1. 初始化與 UI 清理 ]] --
+local UI_NAME = "NekoFly_V5_Standalone"
+local lp = game:GetService("Players").LocalPlayer
+local pGui = lp:WaitForChild("PlayerGui")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+if pGui:FindFirstChild(UI_NAME) then pGui[UI_NAME]:Destroy() end
+
+-- [[ 2. 核心設定 ]] --
+_G.Settings = {
+    FlyEnabled = false,
+    FlySpeed = 10,
+    UpHeld = false,
+    DownHeld = false,
+    CurrentThread = nil -- 用於控制循環線程
+}
+
+local C = {
+    BG = Color3.fromRGB(20, 20, 25),
+    Accent = Color3.fromRGB(255, 120, 180),
+    Text = Color3.fromRGB(240, 240, 245),
+    SubText = Color3.fromRGB(180, 180, 185),
+    Button = Color3.fromRGB(35, 35, 40)
+}
+
+-- [[ 3. UI 構建 ]] --
+local main = Instance.new("ScreenGui", pGui)
+main.Name = UI_NAME
+main.ResetOnSpawn = false
+
+local Frame = Instance.new("Frame", main)
+Frame.Size = UDim2.new(0, 190, 0, 115)
+Frame.Position = UDim2.new(0.1, 0, 0.4, 0)
+Frame.BackgroundColor3 = C.BG
+Frame.BorderSizePixel = 0
+Frame.Active = true
+Frame.Draggable = true
+Frame.ClipsDescendants = true
+Instance.new("UICorner", Frame)
+
+local Stroke = Instance.new("UIStroke", Frame)
+Stroke.Color = C.Accent
+Stroke.Thickness = 1.8
+
+-- UI 粒子容器
+local ParticleContainer = Instance.new("Frame", Frame)
+ParticleContainer.Size = UDim2.new(1, 0, 1, 0)
+ParticleContainer.BackgroundTransparency = 1
+ParticleContainer.ZIndex = 1
+
+local function SpawnUIParticle()
+    if not main.Parent then return end
+    local p = Instance.new("Frame", ParticleContainer)
+    local size = math.random(1, 3)
+    p.Size = UDim2.new(0, size, 0, size)
+    p.Position = UDim2.new(-0.1, 0, math.random(0, 1000)/1000, 0)
+    p.BackgroundColor3 = C.Accent
+    p.BorderSizePixel = 0
+    p.ZIndex = 1
+    Instance.new("UICorner", p).CornerRadius = UDim.new(1, 0)
+    
+    local speed = _G.Settings.FlyEnabled and math.random(5, 10)/10 or math.random(15, 30)/10
+    local t = TweenService:Create(p, TweenInfo.new(speed, Enum.EasingStyle.Linear), {
+        Position = UDim2.new(1.1, 0, p.Position.Y.Scale, 0),
+        BackgroundTransparency = 1
+    })
+    t:Play()
+    t.Completed:Connect(function() p:Destroy() end)
+end
+
+task.spawn(function()
+    while main.Parent do
+        SpawnUIParticle()
+        task.wait(_G.Settings.FlyEnabled and 0.05 or 0.3)
+    end
+end)
+
+-- [[ 4. 核心飛行邏輯 ]] --
+
+local function CleanState(char)
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    
+    if root then
+        for _, v in pairs(root:GetChildren()) do
+            if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end
+        end
+    end
+    if hum then
+        hum.PlatformStand = false
+        hum:ChangeState(Enum.HumanoidStateType.Running)
+    end
+end
+
+local function FlightLoop()
+    local char = lp.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local root = char.HumanoidRootPart
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local cam = workspace.CurrentCamera
+    
+    -- 物理力初始化
+    local bv = Instance.new("BodyVelocity", root)
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Velocity = Vector3.new(0, 0, 0)
+    
+    local bg = Instance.new("BodyGyro", root)
+    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bg.P = 10000
+    bg.CFrame = root.CFrame
+
+    while _G.Settings.FlyEnabled and char.Parent and root.Parent do
+        local forward = (UserInputService:IsKeyDown(Enum.KeyCode.W) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.S) and 1 or 0)
+        local side = (UserInputService:IsKeyDown(Enum.KeyCode.D) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.A) and 1 or 0)
+        local up = (_G.Settings.UpHeld and 1 or 0) - (_G.Settings.DownHeld and 1 or 0)
+        
+        local moveDir = (cam.CFrame.LookVector * forward) + (cam.CFrame.RightVector * side) + (Vector3.new(0, 1, 0) * up)
+        
+        if moveDir.Magnitude > 0 then
+            bv.Velocity = moveDir.Unit * (_G.Settings.FlySpeed * 20)
+        else
+            bv.Velocity = Vector3.new(0, 0, 0)
+        end
+        
+        bg.CFrame = cam.CFrame
+        hum.PlatformStand = true -- 核心：防止內建重力抵消
+        
+        RunService.RenderStepped:Wait()
+    end
+    
+    CleanState(char)
+end
+
+local function ToggleFly()
+    _G.Settings.FlyEnabled = not _G.Settings.FlyEnabled
+    local onof = Frame:FindFirstChild("onof")
+    
+    if _G.Settings.FlyEnabled then
+        if onof then onof.Text = "FLY: ON 🐾"; onof.BackgroundColor3 = C.Accent end
+        -- 使用 task.spawn 避免阻塞主執行緒，這樣快捷鍵才能繼續工作
+        task.spawn(FlightLoop)
+    else
+        if onof then onof.Text = "FLY: OFF"; onof.BackgroundColor3 = C.Button end
+        CleanState(lp.Character)
+    end
+end
+
+-- [[ 5. UI 元件與按鈕 ]] --
+local function CreateBtn(txt, pos, size, name)
+    local b = Instance.new("TextButton", Frame)
+    b.Name = name or txt; b.ZIndex = 10
+    b.Text = txt; b.Position = pos; b.Size = size
+    b.BackgroundColor3 = C.Button; b.TextColor3 = C.Text; b.Font = "GothamBold"; b.TextSize = 14
+    Instance.new("UICorner", b)
+    return b
+end
+
+local Title = Instance.new("TextLabel", Frame)
+Title.Size = UDim2.new(1, 0, 0, 25); Title.BackgroundTransparency = 1
+Title.Text = "NEKO FLY V5"; Title.TextColor3 = C.Accent; Title.Font = "GothamBold"; Title.TextSize = 13; Title.ZIndex = 10
+
+local Tip = Instance.new("TextLabel", Frame)
+Tip.Size = UDim2.new(1, 0, 0, 15); Tip.Position = UDim2.new(0, 0, 0, 22); Tip.BackgroundTransparency = 1
+Tip.Text = "小提示: 按下 CapsLock 飛行"; Tip.TextColor3 = C.SubText; Tip.Font = "GothamMedium"; Tip.TextSize = 10; Tip.ZIndex = 10
+
+local SpeedLabel = Instance.new("TextLabel", Frame)
+SpeedLabel.Size = UDim2.new(0, 40, 0, 25); SpeedLabel.Position = UDim2.new(0.4, 0, 0.48, 0)
+SpeedLabel.BackgroundColor3 = C.Button; SpeedLabel.Text = "10"; SpeedLabel.TextColor3 = C.Text; SpeedLabel.Font = "GothamMedium"; SpeedLabel.ZIndex = 10
+Instance.new("UICorner", SpeedLabel)
+
+local upBtn = CreateBtn("▲", UDim2.new(0.05, 0, 0.48, 0), UDim2.new(0, 30, 0, 25))
+local downBtn = CreateBtn("▼", UDim2.new(0.22, 0, 0.48, 0), UDim2.new(0, 30, 0, 25))
+local plus = CreateBtn("+", UDim2.new(0.65, 0, 0.48, 0), UDim2.new(0, 30, 0, 25))
+local mine = CreateBtn("-", UDim2.new(0.82, 0, 0.48, 0), UDim2.new(0, 30, 0, 25))
+local onof = CreateBtn("FLY: OFF", UDim2.new(0.05, 0, 0.8, 0), UDim2.new(0, 172, 0, 18), "onof")
+
+-- [[ 6. 事件綁定 ]] --
+onof.MouseButton1Click:Connect(ToggleFly)
+plus.MouseButton1Click:Connect(function() _G.Settings.FlySpeed += 5; SpeedLabel.Text = tostring(_G.Settings.FlySpeed) end)
+mine.MouseButton1Click:Connect(function() _G.Settings.FlySpeed = math.max(1, _G.Settings.FlySpeed - 5); SpeedLabel.Text = tostring(_G.Settings.FlySpeed) end)
+
+upBtn.MouseButton1Down:Connect(function() _G.Settings.UpHeld = true end)
+upBtn.MouseButton1Up:Connect(function() _G.Settings.UpHeld = false end)
+downBtn.MouseButton1Down:Connect(function() _G.Settings.DownHeld = true end)
+downBtn.MouseButton1Up:Connect(function() _G.Settings.DownHeld = false end)
+
+-- 關鍵修正：InputBegan 獨立於飛行邏輯
+UserInputService.InputBegan:Connect(function(i, p)
+    if p then return end
+    if i.KeyCode == Enum.KeyCode.CapsLock then
+        ToggleFly()
+    end
+end)
+
+lp.CharacterAdded:Connect(function(c)
+    _G.Settings.FlyEnabled = false
+    CleanState(c)
+end)
+
+print("🐾 Neko Fly V5 (修復版) 已載入！")
